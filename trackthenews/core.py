@@ -22,6 +22,7 @@ import html2text
 import requests
 import yaml
 
+from random import randint
 from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
 from readability import Document
@@ -44,6 +45,7 @@ class Article:
 
         self.matching_grafs = []
         self.imgs = []
+        self.my_image_url = []
         self.tweeted = False
 
     def canonicalize_url(self):
@@ -73,6 +75,43 @@ class Article:
 
         self.plaintext = h.handle(doc.summary())
 
+        # Get image
+        soup = BeautifulSoup(self.res.text, "lxml")
+        images = []
+        for img in soup.findAll('img'):
+            src_1 = img.get('data-src')  # should we also have src?
+            src_2 = img.get('src')
+
+            try:
+                if src_1[:6] == 'https:':
+                    images.append(src_1)
+
+                if src_2[:6] == 'https:':
+                    images.append(src_2)
+
+            except TypeError:
+                continue
+
+        urls_list = []
+        for img in images:
+            reqs = requests.get(img)
+            try:
+                new_img = Image.open((BytesIO(reqs.content)))
+            except OSError:
+                continue
+            img_size = new_img.size[0]*new_img.size[1]
+            if img_size < 90000:
+                continue
+            else:
+                urls_list.append(img)
+
+        print(f'There are {len(urls_list)} image candidate(s).')
+        if urls_list != []:
+            index = randint(0, len(urls_list)-1)
+            self.my_image_url = urls_list[index]
+        else:
+            self.my_image_url = None
+
     def check_for_matches(self):
         """
         Clean up an article, check it against a block list, then for matches.
@@ -90,9 +129,11 @@ class Article:
 
     def tweet(self):
         """Send images to be rendered and tweet them with a text status."""
-        square = False if len(self.matching_grafs) == 1 else True
-        for graf in self.matching_grafs[:4]:
-            self.imgs.append(render_img(graf, square=square))
+        # square = False if len(self.matching_grafs) == 1 else True
+        num_media = 1
+        for graf in self.matching_grafs[:num_media]:
+            magic_number = int(len(graf)**.66)
+            self.imgs.append(render_img(graf, self.my_image_url, width=magic_number))
 
         twitter = get_twitter_instance()
 
@@ -101,7 +142,10 @@ class Article:
         for img in self.imgs:
             try:
                 img_io = BytesIO()
-                img.save(img_io, format='jpeg', quality=95)
+                try:
+                    img.save(img_io, format='jpeg', quality=95)
+                except OSError:
+                    img.save(img_io, format='png')
                 img_io.seek(0)
                 res = twitter.upload_media(media=img_io)
 
@@ -127,44 +171,94 @@ def get_twitter_instance():
 
     return Twython(app_key, app_secret, oauth_token, oauth_token_secret)
 
+# def get_textsize(graf, width, fnt, spacing):
+#     """Take text and additional parameters and return the rendered size."""
+#     wrapped_graf = textwrap.wrap(graf, width)
+#
+#     line_spacing = fnt.getsize('A')[1] + spacing
+#     text_width = max(fnt.getsize(line)[0] for line in wrapped_graf)
+#
+#     textsize = text_width, line_spacing * len(wrapped_graf)
+#
+#     return textsize
+
+
 def get_textsize(graf, width, fnt, spacing):
     """Take text and additional parameters and return the rendered size."""
+
     wrapped_graf = textwrap.wrap(graf, width)
 
     line_spacing = fnt.getsize('A')[1] + spacing
     text_width = max(fnt.getsize(line)[0] for line in wrapped_graf)
+    text_height = line_spacing * len(wrapped_graf)
 
-    textsize = text_width, line_spacing * len(wrapped_graf)
+    # mobile size is 16:9
+    while text_width > 1.78*text_height:
+        width = width-1
+        wrapped_graf = textwrap.wrap(graf, width)
+        line_spacing = fnt.getsize('A')[1] + spacing
+        text_width = max(fnt.getsize(line)[0] for line in wrapped_graf)
+        text_height = line_spacing * len(wrapped_graf)
 
-    return textsize
+    while text_width < 1.78*text_height:
+        width = width+1
+        wrapped_graf = textwrap.wrap(graf, width)
+        line_spacing = fnt.getsize('A')[1] + spacing
+        text_width = max(fnt.getsize(line)[0] for line in wrapped_graf)
+        text_height = line_spacing * len(wrapped_graf)
+
+    textsize = text_width, text_height
+
+    return textsize, width
 
 
-def render_img(graf, width=60, square=False):
+def render_img(graf, img_url, width):
     """Take a paragraph and render an Image of it on a plain background."""
     font_name = config['font']
     font_dir = os.path.join(os.path.dirname(__file__), 'fonts')
     font_path = os.path.join(font_dir, font_name)
     fnt = ImageFont.truetype(font_path, size=36)
-    spacing = 12 # Just a nice spacing number, visually
+    spacing = 12  # Just a nice spacing number, visually
 
     graf = graf.lstrip('#>—-• ')
 
-    if square is True:
-        ts = {w: get_textsize(graf, w, fnt, spacing) \
-                for w in range(20, width)}
-        width = min(ts, key=lambda w: abs(ts.get(w)[1]-ts.get(w)[0]))
+    textsize, new_width = get_textsize(graf, width, fnt, spacing)
+    wrapped = '\n'.join(textwrap.wrap(graf, new_width))
 
-    textsize = get_textsize(graf, width, fnt, spacing)
-    wrapped = '\n'.join(textwrap.wrap(graf, width))
+    # border = 60
+    #
+    # size = tuple(side + border * 2 for side in textsize)
+    # xy = (border, border)
 
-    border = 60
+    # im = Image.new('RGB', size, color=config['color'])
 
-    size = tuple(side + border * 2 for side in textsize)
-    xy = (border, border)
+    framesize = [600, 335]
 
-    im = Image.new('RGB', size, color=config['color'])
+    while framesize[0] < textsize[0] + 60 or framesize[1] < textsize[1] + 60:
+        framesize[0] += 20
+        framesize[1] = int((9/16)*framesize[0])
+
+    adjusted_frame = tuple(framesize)
+    xy = (int((adjusted_frame[0]-textsize[0])/2), int((adjusted_frame[1]-textsize[1])/2))
+
+    if img_url:
+        req = requests.get(img_url)
+        im = Image.open((BytesIO(req.content))).convert('RGB')  # .crop(box=(0, 0, size[0], size[1]))
+        ratio = im.size[0]/im.size[1]
+
+        if im.size[0] < adjusted_frame[0] or im.size[1] < adjusted_frame[1]:
+            if im.size[0] < im.size[1]:
+                im = im.resize(size=(adjusted_frame[0], int(adjusted_frame[0]/ratio)))
+            else:
+                im = im.resize(size=(int(adjusted_frame[0]*ratio), adjusted_frame[0]))
+        im = im.crop(box=(0, 0, adjusted_frame[0], adjusted_frame[1]))
+        im = Image.eval(im, lambda x: x/3)
+
+    else:
+        im = Image.new('RGB', adjusted_frame, color=(100, 40, 40))
+
     draw_obj = ImageDraw.Draw(im)
-    draw_obj.multiline_text(xy, wrapped, fill='#000000', font=fnt, spacing=12)
+    draw_obj.multiline_text(xy, wrapped, fill='#FFFFFF', font=fnt, spacing=12)
 
     return im
 
@@ -354,7 +448,7 @@ def main():
 
     global config
     with open(configfile, encoding="utf-8") as f:
-        config = yaml.load(f)
+            config = yaml.load(f)
 
     global ua
     ua = config['user-agent']
@@ -430,11 +524,17 @@ def main():
             print('Checking {} article {}/{}'.format(
                 article.outlet, counter, len(deduped)))
 
+            print('URL: ', article.url)
             try:
                 article.check_for_matches()
             except:
-                print('Having trouble with that article. Skipping for now.')
-                pass
+                print('Having trouble with that article. Trying again.')
+                try:
+                    article.check_for_matches()
+                except Exception:
+                    print('Something is wrong, you should remove this exception to see.')
+                    print('Exception')
+                    pass
 
             if article.matching_grafs:
                 print("Got one!")
