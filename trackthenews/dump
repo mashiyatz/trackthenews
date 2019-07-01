@@ -1,0 +1,25 @@
+,
+  {
+    "url": "https://www.buzzfeed.com/jp/index.xml",
+    "outlet": "BuzzFeed",
+    "delicateURLs": false,
+    "redirectLinks": false
+  },
+  {
+    "url": "https://www.polygon.com/rss/index.xml",
+    "outlet": "Polygon",
+    "delicateURLs": false,
+    "redirectLinks": false
+  },
+  {
+    "url": "http://rss.asahi.com/rss/asahi/culture.rdf",
+    "outlet": "Asahi",
+    "delicateURLs": false,
+    "redirectLinks": false
+  },
+  {
+    "url": "https://app.famitsu.com/feed/",
+    "outlet": "Famitsu",
+    "delicateURLs": false,
+    "redirectLinks": false
+  }
